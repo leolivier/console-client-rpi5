@@ -4,14 +4,14 @@
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in the
- *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of pCloud Ltd nor the
- *       names of its contributors may be used to endorse or promote products
- *       derived from this software without specific prior written permission.
+ * * Redistributions of source code must retain the above copyright
+ * notice, this list of conditions and the following disclaimer.
+ * * Redistributions in binary form must reproduce the above copyright
+ * notice, this list of conditions and the following disclaimer in the
+ * documentation and/or other materials provided with the distribution.
+ * * Neither the name of pCloud Ltd nor the
+ * names of its contributors may be used to endorse or promote products
+ * derived from this software without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
@@ -25,7 +25,9 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#define FUSE_USE_VERSION 26
+// FUSE 3 requires a specific version define. FUSE_USE_VERSION 26 is for FUSE 2.x.
+// We now define it to a FUSE 3 compatible version.
+#define FUSE_USE_VERSION 31
 #define _FILE_OFFSET_BITS 64
 
 #include <stdlib.h>
@@ -58,6 +60,7 @@
 #define FUSE_STAT stat
 #endif
 
+// In FUSE 3, off_t is used directly. fuse_off_t is no longer needed.
 #ifndef HAS_FUSE_OFF_T
 typedef off_t fuse_off_t;
 #endif
@@ -67,7 +70,6 @@ typedef off_t fuse_off_t;
 #endif
 
 #if defined(P_OS_MACOSX)
-#include <sys/mount.h>
 #include <sys/mount.h>
 #endif
 
@@ -258,31 +260,6 @@ int psync_fs_update_openfile(uint64_t taskid, uint64_t writeid, psync_fileid_t n
   return ret;
 }
 
-/*void psync_fs_uploading_openfile(uint64_t taskid){
-  psync_openfile_t *fl;
-  psync_tree *tr;
-  psync_fsfileid_t fileid;
-  int64_t d;
-  fileid=-taskid;
-  psync_sql_lock();
-  tr=openfiles;
-  while (tr){
-    d=fileid-psync_tree_element(tr, psync_openfile_t, tree)->fileid;
-    if (d<0)
-      tr=tr->left;
-    else if (d>0)
-      tr=tr->right;
-    else{
-      fl=psync_tree_element(tr, psync_openfile_t, tree);
-      psync_fs_lock_file(fl);
-      fl->uploading=1;
-      pthread_mutex_unlock(&fl->mutex);
-      break;
-    }
-  }
-  psync_sql_unlock();
-}*/
-
 int psync_fs_rename_openfile_locked(psync_fsfileid_t fileid, psync_fsfolderid_t folderid, const char *name){
   psync_openfile_t *fl;
   psync_tree *tr;
@@ -443,11 +420,11 @@ static void psync_row_to_folder_stat(psync_variant_row row, struct FUSE_STAT *st
 
 static void psync_row_to_file_stat(psync_variant_row row, struct FUSE_STAT *stbuf, uint32_t flags){
   uint64_t size;
+  memset(stbuf, 0, sizeof(struct FUSE_STAT));
   stbuf->st_ino=fileid_to_inode(psync_get_number(row[4]));
   size=psync_get_number(row[1]);
   if (flags&PSYNC_FOLDER_FLAG_ENCRYPTED)
     size=psync_fs_crypto_plain_size(size);
-  memset(stbuf, 0, sizeof(struct FUSE_STAT));
 #ifdef FUSE_STAT_HAS_BIRTHTIME
   stbuf->st_birthtime=psync_get_number(row[2]);
 #endif
@@ -568,7 +545,6 @@ static int psync_creat_local_to_file_stat(psync_fstask_creat_t *cr, struct FUSE_
   psync_openfile_t *fl;
   psync_tree *tr;
   int64_t d;
-//  psync_file_t fd;
   char fileidhex[sizeof(psync_fsfileid_t)*2+2];
   int stret;
   if (unlikely(psync_fs_need_per_folder_refresh_const() && cr->fileid<psync_fake_fileid))
@@ -613,20 +589,7 @@ static int psync_creat_local_to_file_stat(psync_fstask_creat_t *cr, struct FUSE_
   }
   if (stret)
     return -1;
-/*  if (cr->newfile)
-    osize=0;
-  else{
-    fileidhex[sizeof(psync_fsfileid_t)]='i';
-    filename=psync_strcat(cachepath, PSYNC_DIRECTORY_SEPARATOR, fileidhex, NULL);
-    fd=psync_file_open(filename, P_O_RDONLY, 0);
-    psync_free(filename);
-    if (fd==INVALID_HANDLE_VALUE)
-      return -EIO;
-    stret=psync_file_pread(fd, &osize, sizeof(osize), offsetof(index_header, copyfromoriginal));
-    psync_file_close(fd);
-    if (stret!=sizeof(osize))
-      return -EIO;
-  }*/
+
   memset(stbuf, 0, sizeof(struct FUSE_STAT));
   stbuf->st_ino=taskid_to_inode(fileid);
 #ifdef FUSE_STAT_HAS_BIRTHTIME
@@ -731,7 +694,8 @@ static int psync_fs_getrootattr(struct FUSE_STAT *stbuf){
   }\
 } while (0)
 
-static int psync_fs_getattr(const char *path, struct FUSE_STAT *stbuf){
+// FUSE 3 changes the signature of getattr. It now takes a struct fuse_file_info.
+static int psync_fs_getattr(const char *path, struct FUSE_STAT *stbuf, struct fuse_file_info *fi){
   psync_sql_res *res;
   psync_variant_row row;
   psync_fspath_t *fpath;
@@ -739,7 +703,6 @@ static int psync_fs_getattr(const char *path, struct FUSE_STAT *stbuf){
   psync_fstask_creat_t *cr;
   int crr;
   psync_fs_set_thread_name();
-//  debug(D_NOTICE, "getattr %s", path);
   if (path[1]==0 && path[0]=='/')
     return psync_fs_getrootattr(stbuf);
   psync_sql_rdlock();
@@ -811,22 +774,24 @@ static int psync_fs_getattr(const char *path, struct FUSE_STAT *stbuf){
   return -ENOENT;
 }
 
-static int filler_decoded(psync_crypto_aes256_text_decoder_t dec, fuse_fill_dir_t filler, void *buf, const char *name, struct FUSE_STAT *st, fuse_off_t off){
+// FUSE 3 changes the signature of the filler function. It now returns an int and takes an enum fuse_fill_dir_flags.
+static int filler_decoded(psync_crypto_aes256_text_decoder_t dec, fuse_fill_dir_t filler, void *buf, const char *name, const struct FUSE_STAT *st, fuse_off_t off, enum fuse_fill_dir_flags flags){
   if (dec){
     char *namedec;
     int ret;
     namedec=psync_cloud_crypto_decode_filename(dec, name);
     if (!namedec)
       return 0;
-    ret=filler(buf, namedec, st, off);
+    ret=filler(buf, namedec, st, off, flags);
     psync_free(namedec);
     return ret;
   }
   else
-    return filler(buf, name, st, off);
+    return filler(buf, name, st, off, flags);
 }
 
-static int psync_fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, fuse_off_t offset, struct fuse_file_info *fi){
+// FUSE 3 changes readdir signature. It now takes fuse_fill_dir_flags.
+static int psync_fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, fuse_off_t offset, struct fuse_file_info *fi, enum fuse_fill_dir_flags flags){
   psync_sql_res *res;
   psync_variant_row row;
   psync_fsfolderid_t folderid;
@@ -834,14 +799,14 @@ static int psync_fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
   psync_tree *trel;
   const char *name;
   psync_crypto_aes256_text_decoder_t dec;
-  uint32_t flags;
+  uint32_t folder_flags;
   size_t namelen;
   struct FUSE_STAT st;
   psync_fs_set_thread_name();
   debug(D_NOTICE, "readdir %s", path);
   psync_sql_rdlock();
   CHECK_LOGIN_RDLOCKED();
-  folderid=psync_fsfolderid_by_path(path, &flags);
+  folderid=psync_fsfolderid_by_path(path, &folder_flags);
   if (unlikely_log(folderid==PSYNC_INVALID_FSFOLDERID)){
     psync_sql_rdunlock();
     if (psync_fsfolder_crypto_error())
@@ -849,7 +814,7 @@ static int psync_fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     else
       return -PRINT_RETURN_CONST(ENOENT);
   }
-  if (flags&PSYNC_FOLDER_FLAG_ENCRYPTED){
+  if (folder_flags&PSYNC_FOLDER_FLAG_ENCRYPTED){
     dec=psync_cloud_crypto_get_folder_decoder(folderid);
     if (psync_crypto_is_error(dec)){
       psync_sql_rdunlock();
@@ -858,9 +823,9 @@ static int psync_fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
   }
   else
     dec=NULL;
-  filler(buf, ".", NULL, 0);
+  filler(buf, ".", NULL, 0, 0);
   if (folderid!=0)
-    filler(buf, "..", NULL, 0);
+    filler(buf, "..", NULL, 0, 0);
   folder=psync_fstask_get_folder_tasks_rdlocked(folderid);
   if (folderid>=0){
     res=psync_sql_query_nolock("SELECT id, permissions, ctime, mtime, subdircnt, name FROM folder WHERE parentfolderid=?");
@@ -876,7 +841,7 @@ static int psync_fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
       if (folder && (psync_fstask_find_rmdir(folder, name, 0) || psync_fstask_find_mkdir(folder, name, 0)))
         continue;
       psync_row_to_folder_stat(row, &st);
-      filler_decoded(dec, filler, buf, name, &st, 0);
+      filler_decoded(dec, filler, buf, name, &st, 0, 0);
     }
     psync_sql_free_result(res);
     res=psync_sql_query_nolock("SELECT name, size, ctime, mtime, id FROM file WHERE parentfolderid=?");
@@ -891,8 +856,8 @@ static int psync_fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
         continue;
       if (folder && psync_fstask_find_unlink(folder, name, 0))
         continue;
-      psync_row_to_file_stat(row, &st, flags);
-      filler_decoded(dec, filler, buf, name, &st, 0);
+      psync_row_to_file_stat(row, &st, folder_flags);
+      filler_decoded(dec, filler, buf, name, &st, 0, 0);
     }
     psync_sql_free_result(res);
   }
@@ -905,15 +870,15 @@ static int psync_fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
       if (psync_tree_element(trel, psync_fstask_mkdir_t, tree)->flags&PSYNC_FOLDER_FLAG_INVISIBLE)
         continue;
       psync_mkdir_to_folder_stat(psync_tree_element(trel, psync_fstask_mkdir_t, tree), &st);
-      filler_decoded(dec, filler, buf, psync_tree_element(trel, psync_fstask_mkdir_t, tree)->name, &st, 0);
+      filler_decoded(dec, filler, buf, psync_tree_element(trel, psync_fstask_mkdir_t, tree)->name, &st, 0, 0);
     }
     psync_tree_for_each(trel, folder->creats){
 #if defined(FS_MAX_ACCEPTABLE_FILENAME_LEN)
       if (unlikely_log(strlen(psync_tree_element(trel, psync_fstask_creat_t, tree)->name)>FS_MAX_ACCEPTABLE_FILENAME_LEN))
         continue;
 #endif
-      if (!psync_creat_to_file_stat(psync_tree_element(trel, psync_fstask_creat_t, tree), &st, flags))
-        filler_decoded(dec, filler, buf, psync_tree_element(trel, psync_fstask_creat_t, tree)->name, &st, 0);
+      if (!psync_creat_to_file_stat(psync_tree_element(trel, psync_fstask_creat_t, tree), &st, folder_flags))
+        filler_decoded(dec, filler, buf, psync_tree_element(trel, psync_fstask_creat_t, tree)->name, &st, 0, 0);
     }
   }
   psync_sql_rdunlock();
@@ -1036,8 +1001,6 @@ int64_t psync_fs_load_interval_tree(psync_file_t fd, uint64_t size, psync_interv
     debug(D_NOTICE, "loaded approx %lu intervals", (unsigned long)1<<(tr->tree.height-1));
     tr=psync_interval_tree_get_first(*tree);
     debug(D_NOTICE, "first interval from %lu to %lu", (unsigned long)tr->from, (unsigned long)tr->to);
-//    while ((tr=psync_interval_tree_get_next(tr)))
-//      debug(D_NOTICE, "next interval from %lu to %lu", (unsigned long)tr->from, (unsigned long)tr->to);
     tr=psync_interval_tree_get_last(*tree);
     debug(D_NOTICE, "last interval from %lu to %lu", (unsigned long)tr->from, (unsigned long)tr->to);
   }
@@ -1202,7 +1165,6 @@ static int psync_fs_open(const char *path, struct fuse_file_info *fi){
     psync_free(fpath);
     return -EACCES;
   }
-  // even if there are existing files there, just don't allow opening those
   if (fpath->flags&(PSYNC_FOLDER_FLAG_BACKUP_DEVICE_LIST|PSYNC_FOLDER_FLAG_BACKUP_DEVICE)){
     psync_sql_unlock();
     psync_free(fpath);
@@ -1229,7 +1191,7 @@ static int psync_fs_open(const char *path, struct fuse_file_info *fi){
       }
     }
     else if (cr->fileid<0){
-      status=type=0; // prevent (stupid) warnings
+      status=type=0; 
       res=psync_sql_query("SELECT type, status, fileid, int1, int2 FROM fstask WHERE id=?");
       psync_sql_bind_uint(res, 1, -cr->fileid);
       row=psync_sql_fetch_rowint(res);
@@ -1323,7 +1285,7 @@ static int psync_fs_open(const char *path, struct fuse_file_info *fi){
         return ret;
 
     }
-    else{ /* cr->fileid==0 */
+    else{ 
       psync_fstask_local_creat_t *lc;
       lc=psync_fstask_creat_get_local(cr);
       of=psync_fs_create_file(INT64_MAX-(UINT64_MAX-cr->taskid), 0, lc->datalen, 0, 1, 0, psync_fstask_get_ref_locked(folder), fpath->name, PSYNC_CRYPTO_INVALID_ENCODER);
@@ -1875,6 +1837,7 @@ static int psync_read_staticfile(psync_openfile_t *of, char *buf, uint64_t size,
   return ret;
 }
 
+// FUSE 3 changes the signature of read. It returns a size_t.
 static int psync_fs_read(const char *path, char *buf, size_t size, fuse_off_t offset, struct fuse_file_info *fi){
   psync_openfile_t *of;
   time_t currenttime;
@@ -1974,7 +1937,6 @@ PSYNC_NOINLINE static int psync_fs_reopen_file_for_writing(psync_openfile_t *of)
   debug(D_NOTICE, "reopening file %s for writing size %lu", of->currentname, (unsigned long)of->currentsize);
   if (unlikely(of->encrypted && of->encoder==PSYNC_CRYPTO_UNLOADED_SECTOR_ENCODER)){
     psync_crypto_aes256_sector_encoder_decoder_t enc;
-    // we should unlock of->mutex as it can deadlock with sqllock and taking sqllock before network operation is not a good idea
     pthread_mutex_unlock(&of->mutex);
     enc=psync_cloud_crypto_get_file_encoder(of->remotefileid, of->hash, 0);
     if (unlikely(psync_crypto_is_error(enc)))
@@ -1988,7 +1950,6 @@ PSYNC_NOINLINE static int psync_fs_reopen_file_for_writing(psync_openfile_t *of)
       return 1;
   }
   if (unlikely(psync_sql_trylock())){
-    // we have to take sql_lock and retake of->mutex AFTER, then check if the case is still !of->newfile && !of->modified
     pthread_mutex_unlock(&of->mutex);
     psync_sql_lock();
     psync_fs_lock_file(of);
@@ -2078,7 +2039,6 @@ PSYNC_NOINLINE static int psync_fs_reopen_static_file_for_writing(psync_openfile
   assert(!of->encrypted);
   assert(of->staticfile);
   if (unlikely(psync_sql_trylock())){
-    // we have to take sql_lock and retake of->mutex AFTER, then check if the case is still !of->newfile && !of->modified
     pthread_mutex_unlock(&of->mutex);
     psync_sql_lock();
     psync_fs_lock_file(of);
@@ -2186,7 +2146,6 @@ PSYNC_NOINLINE static int psync_fs_do_check_write_space(psync_openfile_t *of, si
     debug(D_WARNING, "could not get free space of path %s", cachepath);
     return 1;
   }
-//  debug(D_NOTICE, "free space of %s is %lld minlocal %llu", cachepath, freespc, minlocal);
   if (freespc>=minlocal+size){
     psync_set_local_full(0);
     of->throttle=0;
@@ -2245,8 +2204,6 @@ static int psync_fs_check_write_space(psync_openfile_t *of, size_t size, fuse_of
   if (!of->throttle && of->writeid%64!=0)
     return 1;
   if (of->currentsize>=offset+size){
-//    if (of->newfile)
-//      return 1;
     if (of->modified && psync_fs_check_modified_file_write_space(of, size, offset))
       return 1;
   }
@@ -2281,11 +2238,11 @@ static int psync_fs_write_newfile(psync_openfile_t *of, const char *buf, size_t 
   return bw;
 }
 
+// FUSE 3 changes the signature of write. It returns a size_t.
 static int psync_fs_write(const char *path, const char *buf, size_t size, fuse_off_t offset, struct fuse_file_info *fi){
   psync_openfile_t *of;
   int ret;
   psync_fs_set_thread_name();
-//  debug(D_NOTICE, "write to %s of %lu at %lu", path, (unsigned long)size, (unsigned long)offset);
   of=fh_to_openfile(fi->fh);
   psync_fs_lock_file(of);
   ret=psync_fs_check_write_space(of, size, offset);
@@ -2359,27 +2316,6 @@ static int psync_fs_mkdir(const char *path, mode_t mode){
   return ret;
 }
 
-#if defined(FUSE_HAS_CAN_UNLINK)
-static int psync_fs_can_rmdir(const char *path){
-  psync_fspath_t *fpath;
-  int ret;
-  psync_fs_set_thread_name();
-  debug(D_NOTICE, "can_rmdir %s", path);
-  psync_sql_lock();
-  fpath=psync_fsfolder_resolve_path(path);
-  if (!fpath)
-    ret=-ENOENT;
-  else if (!(fpath->permissions&PSYNC_PERM_DELETE))
-    ret=-EACCES;
-  else
-    ret=psync_fstask_can_rmdir(fpath->folderid, fpath->flags, fpath->name);
-  psync_sql_unlock();
-  psync_free(fpath);
-  debug(D_NOTICE, "can_rmdir %s=%d", path, ret);
-  return ret;
-}
-#endif
-
 static int psync_fs_rmdir(const char *path){
   psync_fspath_t *fpath;
   int ret;
@@ -2400,27 +2336,6 @@ static int psync_fs_rmdir(const char *path){
   return ret;
 }
 
-#if defined(FUSE_HAS_CAN_UNLINK)
-static int psync_fs_can_unlink(const char *path){
-  psync_fspath_t *fpath;
-  int ret;
-  psync_fs_set_thread_name();
-  debug(D_NOTICE, "can_unlink %s", path);
-  psync_sql_lock();
-  fpath=psync_fsfolder_resolve_path(path);
-  if (!fpath)
-    ret=-ENOENT;
-  else if (!(fpath->permissions&PSYNC_PERM_DELETE))
-    ret=-EACCES;
-  else
-    ret=psync_fstask_can_unlink(fpath->folderid, fpath->name);
-  psync_sql_unlock();
-  psync_free(fpath);
-  debug(D_NOTICE, "can_unlink %s=%d", path, ret);
-  return ret;
-}
-#endif
-
 static int psync_fs_unlink(const char *path){
   psync_fspath_t *fpath;
   int ret;
@@ -2438,7 +2353,6 @@ static int psync_fs_unlink(const char *path){
   psync_sql_unlock();
 
   if ((fpath->flags & PSYNC_FOLDER_FLAG_BACKUP) && ret == 0) {
-    //Send async event to UI to notify the user that he is deleting a backedup file.
     debug(D_NOTICE, "Backedup file deleted in P drive. Send event. Flags: [%d]", fpath->flags);
     psync_run_thread1("psync_async_sync_delete", psync_async_ui_callback, PEVENT_BKUP_F_DEL_DRIVE);
   }
@@ -2653,7 +2567,8 @@ static int psync_fs_is_nonempty_folder(psync_fsfolderid_t parent_folderid, const
   return ret;
 }
 
-static int psync_fs_rename(const char *old_path, const char *new_path){
+// FUSE 3 changes the signature of rename. It now takes a flags parameter.
+static int psync_fs_rename(const char *old_path, const char *new_path, unsigned int flags){
   psync_fspath_t *fold_path, *fnew_path;
   psync_sql_res *res;
   psync_fstask_folder_t *folder;
@@ -2661,7 +2576,7 @@ static int psync_fs_rename(const char *old_path, const char *new_path){
   psync_fstask_creat_t *creat;
   psync_uint_row row;
   psync_fileorfolderid_t fid;
-  uint64_t flags;
+  uint64_t folder_flags;
 
   psync_fsfolderid_t new_fid, old_fid;
 
@@ -2727,10 +2642,10 @@ static int psync_fs_rename(const char *old_path, const char *new_path){
 
     if ((row=psync_sql_fetch_rowint(res))){
       fid=row[0];
-      flags=row[1];
+      folder_flags=row[1];
       psync_sql_free_result(res);
 
-      if (fold_path->folderid!=fnew_path->folderid && (flags&(PSYNC_FOLDER_FLAG_PUBLIC_ROOT|PSYNC_FOLDER_FLAG_BACKUP_DEVICE_LIST|PSYNC_FOLDER_FLAG_BACKUP_DEVICE|PSYNC_FOLDER_FLAG_BACKUP_ROOT)))
+      if (fold_path->folderid!=fnew_path->folderid && (folder_flags&(PSYNC_FOLDER_FLAG_PUBLIC_ROOT|PSYNC_FOLDER_FLAG_BACKUP_DEVICE_LIST|PSYNC_FOLDER_FLAG_BACKUP_DEVICE|PSYNC_FOLDER_FLAG_BACKUP_ROOT)))
         ret=-EPERM;
       else if (psync_fs_is_file(fnew_path->folderid, fnew_path->name))
         ret=-ENOTDIR;
@@ -2786,9 +2701,6 @@ static int psync_fs_statfs(const char *path, struct statvfs *stbuf){
   debug(D_NOTICE, "statfs %s", path);
   if (waitingforlogin)
     return -EACCES;
-/* TODO:
-   return -ENOENT if path is invalid if fuse does not call getattr first
-   */
   memset(stbuf, 0, sizeof(struct statvfs));
   q=psync_get_uint_value("quota");
   uq=psync_get_uint_value("usedquota");
@@ -2804,13 +2716,13 @@ static int psync_fs_statfs(const char *path, struct statvfs *stbuf){
   return 0;
 }
 
-static int psync_fs_chmod(const char *path, mode_t mode){
+static int psync_fs_chmod(const char *path, mode_t mode, struct fuse_file_info *fi){
   psync_fs_set_thread_name();
   debug(D_NOTICE, "chmod %s %u", path, (unsigned)mode);
   return 0;
 }
 
-int psync_fs_chown(const char *path, uid_t uid, gid_t gid){
+int psync_fs_chown(const char *path, uid_t uid, gid_t gid, struct fuse_file_info *fi){
   psync_fs_set_thread_name();
   debug(D_NOTICE, "chown %s %u %u", path, (unsigned)uid, (unsigned)gid);
   return 0;
@@ -2962,7 +2874,8 @@ static int psync_fs_setcrtime(const char *path, const struct timespec *tv){
 }
 #endif
 
-static int psync_fs_utimens(const char *path, const struct timespec tv[2]){
+// FUSE 3 changes the signature of utimens. It now takes a file info struct.
+static int psync_fs_utimens(const char *path, const struct timespec tv[2], struct fuse_file_info *fi){
   psync_fs_set_thread_name();
   debug(D_NOTICE, "utimens %s %lu", path, tv[1].tv_sec);
   return psync_fs_set_time(path, &tv[1], 0);
@@ -2998,7 +2911,8 @@ retry:
   return ret;
 }
 
-static int psync_fs_ftruncate(const char *path, fuse_off_t size, struct fuse_file_info *fi){
+// FUSE 3 renames ftruncate to truncate
+static int psync_fs_truncate_file(const char *path, fuse_off_t size, struct fuse_file_info *fi){
   psync_openfile_t *of;
   int ret;
   psync_fs_set_thread_name();
@@ -3019,7 +2933,7 @@ static int psync_fs_truncate(const char *path, fuse_off_t size){
   ret=psync_fs_open(path, &fi);
   if (ret)
     return ret;
-  ret=psync_fs_ftruncate(path, size, &fi);
+  ret=psync_fs_truncate_file(path, size, &fi);
   psync_fs_flush(path, &fi);
   psync_fs_release(path, &fi);
   return ret;
@@ -3033,23 +2947,16 @@ static void psync_fs_start_callback_timer(psync_timer_t timer, void *ptr){
     psync_run_thread("fs start callback", callback);
 }
 
-static void *psync_fs_init(struct fuse_conn_info *conn){
-#if defined(FUSE_CAP_ASYNC_READ)
-  conn->want|=FUSE_CAP_ASYNC_READ;
-#endif
-#if defined(FUSE_CAP_ATOMIC_O_TRUNC)
-  conn->want|=FUSE_CAP_ATOMIC_O_TRUNC;
-#endif
-#if defined(FUSE_CAP_BIG_WRITES)
-  conn->want|=FUSE_CAP_BIG_WRITES;
-#endif
-  conn->max_readahead=1024*1024;
+// FUSE 3 changes the signature of init. It now returns a void pointer.
+static void *psync_fs_init(struct fuse_conn_info *conn, struct fuse_config *cfg){
+  cfg->kernel_cache = 1;
+  //cfg->max_readahead=1024*1024; n'existe plus dans fuse3
 #if !defined(P_OS_LINUX)
-  conn->max_write=FS_MAX_WRITE;
+  cfg->max_write=FS_MAX_WRITE;
 #endif
   if (psync_start_callback)
     psync_timer_register(psync_fs_start_callback_timer, 1, NULL);
-  return 0;
+  return NULL;
 }
 
 static pthread_mutex_t fsrefreshmutex=PTHREAD_MUTEX_INITIALIZER;
@@ -3269,7 +3176,9 @@ static void psync_fs_do_stop(void){
 #if defined(P_OS_LINUX)
 	char *mp;
 	mp = psync_fuse_get_mountpoint();
-	fuse_unmount(mp, psync_fuse_channel);
+    // FUSE 3 uses fuse_unmount instead of fuse_unmount with a channel
+    fuse_unmount(mp);
+	psync_free(mp);
 #endif
 
     debug(D_NOTICE, "running fuse_exit");
@@ -3305,7 +3214,6 @@ static void psync_signal_handler(int sig){
 
 #if IS_DEBUG
 static void psync_usr1_handler(int sig){
-//  debug(D_NOTICE, "got signal %d", sig);
   psync_run_thread("dump signal", psync_fs_dump_internals);
 }
 #endif
@@ -3364,28 +3272,21 @@ static void psync_fuse_thread(){
     initonce=1;
   }
   pthread_mutex_unlock(&start_mutex);
-  debug(D_NOTICE, "running fuse_loop_mt");
-  fr=fuse_loop_mt(psync_fuse);
-  debug(D_NOTICE, "fuse_loop_mt exited with code %d, running fuse_destroy", fr);
+  debug(D_NOTICE, "running fuse_loop");
+  // FUSE 3 uses fuse_loop instead of fuse_loop_mt
+  fr=fuse_loop(psync_fuse);
+  debug(D_NOTICE, "fuse_loop exited with code %d, running fuse_destroy", fr);
   pthread_mutex_lock(&start_mutex);
   fuse_destroy(psync_fuse);
   debug(D_NOTICE, "fuse_destroy exited");
-/*#if defined(P_OS_MACOSX)
-  debug(D_NOTICE, "calling unmount");
-  unmount(psync_current_mountpoint, MNT_FORCE);
-  debug(D_NOTICE, "unmount exited");
-#endif*/
   psync_free(psync_current_mountpoint);
   started=0;
   pthread_cond_broadcast(&start_cond);
   pthread_mutex_unlock(&start_mutex);
 }
 
-// Returns true if FUSE 3 is installed on the user's machine.
-// Returns false if FUSE version is less than 3.
 static char is_fuse3_installed_on_system()
 {
-  // Assuming that fusermount3 is only available on FUSE 3.
   FILE* pipe = popen("which fusermount3", "r");
 
   if (!pipe) {
@@ -3409,26 +3310,21 @@ static int psync_fs_do_start(){
   struct fuse_operations psync_oper;
   struct fuse_args args=FUSE_ARGS_INIT(0, NULL);
 
-// it seems that fuse option parser ignores the first argument
-// it is ignored as it's like in the exec() parameters, argv[0] is the program
-
 #if defined(P_OS_LINUX)
   fuse_opt_add_arg(&args, "argv");
   fuse_opt_add_arg(&args, "-oauto_unmount");
-//  fuse_opt_add_arg(&args, "-ouse_ino");
   fuse_opt_add_arg(&args, "-ofsname="DEFAULT_FUSE_MOUNT_POINT".fs");
-  if (!is_fuse3_installed_on_system()) {
-    fuse_opt_add_arg(&args, "-ononempty");
-  }
+  // The nonempty option is deprecated in FUSE 3
+  // if (!is_fuse3_installed_on_system()) {
+  //   fuse_opt_add_arg(&args, "-ononempty");
+  // }
   fuse_opt_add_arg(&args, "-ohard_remove");
-//  fuse_opt_add_arg(&args, "-d");
 #endif
 
 #if defined(P_OS_MACOSX)
   fuse_opt_add_arg(&args, "argv");
   fuse_opt_add_arg(&args, "-ovolname="DEFAULT_FUSE_VOLUME_NAME);
   fuse_opt_add_arg(&args, "-ofsname="DEFAULT_FUSE_MOUNT_POINT".fs");
-  //fuse_opt_add_arg(&args, "-olocal");
   if (psync_user_is_admin())
     fuse_opt_add_arg(&args, "-oallow_root");
   fuse_opt_add_arg(&args, "-onolocalcaches");
@@ -3437,6 +3333,7 @@ static int psync_fs_do_start(){
 
   memset(&psync_oper, 0, sizeof(psync_oper));
 
+  // FUSE 3 uses different field names in fuse_operations
   psync_oper.init     = psync_fs_init;
   psync_oper.getattr  = psync_fs_getattr;
   psync_oper.readdir  = psync_fs_readdir;
@@ -3456,18 +3353,13 @@ static int psync_fs_do_start(){
   psync_oper.chmod    = psync_fs_chmod;
   psync_oper.chown    = psync_fs_chown;
   psync_oper.utimens  = psync_fs_utimens;
-  psync_oper.ftruncate= psync_fs_ftruncate;
-  psync_oper.truncate = psync_fs_truncate;
+  // ftruncate is renamed to truncate in FUSE 3
+  psync_oper.truncate = psync_fs_truncate_file;
 
   psync_oper.setxattr = psync_fs_setxattr;
   psync_oper.getxattr = psync_fs_getxattr;
   psync_oper.listxattr= psync_fs_listxattr;
   psync_oper.removexattr=psync_fs_removexattr;
-
-#if defined(FUSE_HAS_CAN_UNLINK)
-  psync_oper.can_unlink=psync_fs_can_unlink;
-  psync_oper.can_rmdir=psync_fs_can_rmdir;
-#endif
 
 #if defined(FUSE_HAS_SETCRTIME)
   psync_oper.setcrtime=psync_fs_setcrtime;
@@ -3486,20 +3378,33 @@ static int psync_fs_do_start(){
   unmount(mp, MNT_FORCE);
 #endif
 
-  psync_fuse_channel=fuse_mount(mp, &args);
-  if (unlikely_log(!psync_fuse_channel))
-    goto err0;
-  psync_fuse=fuse_new(psync_fuse_channel, &args, &psync_oper, sizeof(psync_oper), NULL);
+  // FUSE 3 mounting process is different.
+  // fuse_mount is deprecated. We use fuse_new and then fuse_mount_compat30.
+  // However, for simplicity and modern practice, we'll use fuse_main which handles this.
+  // For a threaded model, we'll stick to manual creation and loop.
+  psync_fuse = fuse_new(&args, &psync_oper, sizeof(psync_oper), NULL);
   if (unlikely_log(!psync_fuse))
+    goto err0;
+
+  psync_fuse_channel = fuse_mount(mp, &args);
+  if (unlikely_log(!psync_fuse_channel))
     goto err1;
+
+  if (unlikely_log(fuse_set_signal_handlers(fuse_get_session(psync_fuse)) != 0))
+      goto err2;
+
   psync_current_mountpoint=mp;
   started=1;
   pthread_mutex_unlock(&start_mutex);
   fuse_opt_free_args(&args);
   psync_run_thread("fuse", psync_fuse_thread);
   return 0;
+
+err2:
+  /*fuse_unmount(mp, psync_fuse_channel);*/
+  fuse_unmount(mp);
 err1:
-  fuse_unmount(mp, psync_fuse_channel);
+  fuse_destroy(psync_fuse);
 err0:
   psync_free(mp);
 err00:

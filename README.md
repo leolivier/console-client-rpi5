@@ -1,24 +1,22 @@
 # pCloud Console Client
 
 This is a simple linux console client for pCloud cloud storage. 
+This fork is a port to RaspberryPI 5 tuned for cortex-a76 and with fuse upgraded to fuse3
 
 ## Required libraries 
 [Zlib](http://zlib.net/)  A Massively Spiffy Yet Delicately Unobtrusive Compression Library.  
 [Boost](http://www.boost.org/) Boost system and boost program options libraries used.  
 [Pthread](http://www.gnu.org/)   
-[Fuse](https://github.com/libfuse/libfuse) Filesystem in Userspace.  
+[Fuse3](https://github.com/libfuse/libfuse) Filesystem in Userspace.  
   
 Also requires   
 [CMake](https://cmake.org/) build system.  
 
-On Ubuntu you can run the following command:  
-> sudo apt-get install cmake zlib1g-dev libboost-system-dev libboost-program-options-dev libpthread-stubs0-dev libfuse-dev libudev-dev
+## Build steps on Raspberry Pi 5
 
-## Build steps
-
-> sudo apt-get install cmake zlib1g-dev libboost-system-dev libboost-program-options-dev libpthread-stubs0-dev libfuse-dev libudev-dev fuse build-essential git
+> sudo apt-get install cmake zlib1g-dev libboost-system-dev libboost-program-options-dev libpthread-stubs0-dev libfuse3-dev libudev-dev fuse3 build-essential git
 > mkdir console-client   
-> git clone https://github.com/pcloudcom/console-client.git ./console-client/  
+> git clone https://github.com/leolivier/console-client-rpi5.git ./console-client/  
 > cd ./console-client/pCloudCC/   
 > cd lib/pclsync/        
 > make clean    
